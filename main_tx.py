@@ -70,7 +70,7 @@ padding_zeros = max_bits - message_len
 pad_bits = np.random.randint(0, 2, padding_zeros)
 padded_filebits = np.concatenate((filebits, pad_bits))
 all_bits = np.concatenate((header_bit_values, padded_filebits))
-
+all_bits = ldpc_encode(all_bits)   
 tx_symbols, remainder = bits_to_qam_symbols(all_bits, M)
 constellation = get_qam_constellation(M, Es=1)
 print(f"num_transmit_symbols = {len(tx_symbols)}, remainder = {remainder}")
