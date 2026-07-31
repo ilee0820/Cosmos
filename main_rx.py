@@ -14,10 +14,10 @@ from helpers import *
 import traceback
 
 OUTPUT_DIR = Path("/Users/vincent/Desktop/SDRReceivedLogs")
-PLUTO_URI = "usb:0.1.5"
+PLUTO_URI = "usb:1.1.5"
 CHANNEL = 7
 GAIN_LEVEL = 80
-RX_BUFFER_SIZE = int(200e3)
+RX_BUFFER_SIZE = int(1e6)
 ROTATION_SECONDS = 60
 
 M = 16
@@ -33,13 +33,20 @@ def main() -> None:
     rx.set_channel(CHANNEL)
     rx.set_gain_level(GAIN_LEVEL)
     rx.desired_transmit_symbols_real = False
+
     bits_per_symbol = int(np.log2(M))
-    rx.num_transmit_symbols = (HEADER_BITS + MAX_BITS) // bits_per_symbol
+
+    # Initialise LDPC matrices once at startup (takes ~1-2 s).
+    # This also ensures TX and RX agree on the coded symbol count
+    # before the receive loop begins.
+    _init_ldpc()
+    rx.num_transmit_symbols = ldpc_coded_symbol_count(HEADER_BITS + MAX_BITS, bits_per_symbol)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Receiver started. Waiting for transmissions...")
     print(f"Saving to: {OUTPUT_DIR}")
+    print(f"Expecting {rx.num_transmit_symbols} symbols per frame (LDPC rate-1/2)")
     print("Press Control-C to stop.")
 
     window_start = time.monotonic()
@@ -60,8 +67,13 @@ def main() -> None:
                 rx_symbols = rx.receive()
                 rx_bits = qam_symbols_to_bits(rx_symbols, M, 0)
 
+                # LDPC decode: corrects bit errors introduced by the channel.
+                # snr_db is the assumed channel SNR used for BP reliability init —
+                # tune between 3–8 dB if you see excess uncorrected errors.
+                rx_bits = ldpc_decode(rx_bits, snr_db=5.0)
+
                 if len(rx_bits) < HEADER_BITS:
-                    print("Decode failed: frame too short")
+                    print("Decode failed: frame too short after LDPC decode")
                     continue
 
                 header_string = "".join(str(int(b)) for b in rx_bits[:HEADER_BITS])
@@ -75,15 +87,14 @@ def main() -> None:
                     print(f"Decode failed: message length {message_len} not byte-aligned")
                     continue
 
-                    
                 required_bits = HEADER_BITS + message_len
-                
+
                 if len(rx_bits) < required_bits:
                     print(f"Decode failed: need {required_bits} bits, got {len(rx_bits)}")
                     continue
 
                 message_bits = rx_bits[HEADER_BITS:required_bits]
-                
+
                 rx_bytes = bits_to_bytes(message_bits)
 
                 KEY = b"PatTEws1o7HD5TpT-9IowWCdhxXvOKFXsQJxoAWf_lQ="
